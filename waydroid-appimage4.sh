@@ -15,8 +15,8 @@ fi
 echo "=============================================="
 echo "Atualizando repositórios e instalando dependências básicas..."
 echo "=============================================="
-apt-get update
-apt-get install -y curl wget lxc bsdtar squashfs-tools
+#apt-get update
+#apt-get install -y curl wget lxc bsdtar squashfs-tools
 
 # Se o ImageMagick não estiver instalado, recomendamos instalá-lo (necessário para criar um ícone placeholder se necessário)
 if ! command -v convert &> /dev/null; then
