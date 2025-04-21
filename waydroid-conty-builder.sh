@@ -26,7 +26,7 @@ mkdir -p "$APPDIR"
 
 echo "Baixando Waydroid..."
 # Aqui você pode substituir pela URL oficial ou repositório do Waydroid
-WAYDROID_URL="https://github.com/waydroid/waydroid/releases/download/v1.0/waydroid.tar.gz"
+WAYDROID_URL="https://github.com/waydroid/waydroid/archive/refs/tags/1.5.1.tar.gz"
 wget -O "$WORKDIR/waydroid.tar.gz" "$WAYDROID_URL"
 
 echo "Extraindo Waydroid..."
