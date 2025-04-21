@@ -11,7 +11,6 @@ APPIMAGE_NAME="WayDroid.AppImage"
 DEPENDENCIES=(
     "git"
     "wget"
-    "squashfs-tools"
     "pkg-config"
     "cmake"
     "libfuse-dev"
