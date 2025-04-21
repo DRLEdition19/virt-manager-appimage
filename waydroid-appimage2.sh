@@ -6,6 +6,7 @@ BIN="$APP" #CHANGE THIS IF THE NAME OF THE BINARY IS DIFFERENT FROM "$APP" (for 
 DEPENDENCES="wayland lxc python-gbinder python-gobject python-pip python-requests python-yaml python-cryptography python-iniparse" #SYNTAX: "APP1 APP2 APP3 APP4...", LEAVE BLANK IF NO OTHER DEPENDENCES ARE NEEDED
 BASICSTUFF="binutils gzip"
 COMPILERS="gcc"
+KERNELMODULES="binder-linux-dkms"  # Added DKMS package for binder-linux
 
 # ADD A VERSION, THIS IS NEEDED FOR THE NAME OF THE FINEL APPIMAGE, IF NOT AVAILABLE ON THE REPO, THE VALUE COME FROM AUR, AND VICE VERSA
 for REPO in { "core" "extra" "community" "multilib" }; do
@@ -53,7 +54,16 @@ wget -q https://archlinux.org/mirrorlist/?country="$(echo $COUNTRY)" -O - | sed 
 
 # INSTALL THE PROGRAM USING YAY
 ./.local/share/junest/bin/junest -- yay -Syy
-./.local/share/junest/bin/junest -- yay --noconfirm -S gnu-free-fonts $(echo "$BASICSTUFF $COMPILERS $DEPENDENCES $APP")
+./.local/share/junest/bin/junest -- yay --noconfirm -S gnu-free-fonts $(echo "$BASICSTUFF $COMPILERS $DEPENDENCES $APP $KERNELMODULES")
+
+# Download user-space binder-linux module implementation
+./.local/share/junest/bin/junest -- bash -c "
+mkdir -p /opt/waydroid-modules
+cd /opt/waydroid-modules
+git clone https://github.com/choff/anbox-binder
+cd anbox-binder
+make
+"
 
 # Clone waydroid repo if not in packages
 ./.local/share/junest/bin/junest -- bash -c "
@@ -61,10 +71,22 @@ if ! pacman -Q waydroid &>/dev/null; then
     cd /tmp
     git clone https://github.com/waydroid/waydroid.git
     cd waydroid
-    sudo pip install --break-system-packages .
-    sudo mkdir -p /etc/waydroid
-    sudo cp data/configs/* /etc/waydroid/
+    pip install --user --break-system-packages .
+    mkdir -p ~/.config/waydroid
+    cp data/configs/* ~/.config/waydroid/
 fi
+"
+
+# Install userspace LXC tools
+./.local/share/junest/bin/junest -- bash -c "
+mkdir -p /opt/waydroid-userspace
+cd /opt/waydroid-userspace
+git clone https://github.com/lxc/lxc.git
+cd lxc
+./autogen.sh
+./configure --prefix=/opt/waydroid-userspace/lxc-install --disable-docs --disable-apparmor --disable-selinux --disable-seccomp --disable-capabilities
+make -j$(nproc)
+make install
 "
 
 # SET THE LOCALE (DON'T TOUCH THIS)
@@ -96,8 +118,8 @@ else
 	[Desktop Entry]
 	Version=1.0
 	Type=Application
-	Name=Waydroid
-	Comment=Android Container for Wayland
+	Name=Waydroid (No Root)
+	Comment=Android Container for Wayland - No Root Required
 	Exec=waydroid
 	Icon=waydroid
 	Categories=Utility;System;
@@ -121,25 +143,58 @@ HERE="$(dirname "$(readlink -f $0)")"
 export UNION_PRELOAD=$HERE
 export JUNEST_HOME=$HERE/.junest
 export PATH=$HERE/.local/share/junest/bin/:$PATH
+
+# Create necessary directories
 mkdir -p $HOME/.cache
 mkdir -p $HOME/.local/share/waydroid
 mkdir -p $HOME/.config/waydroid
+mkdir -p $HOME/.local/share/lxc
+mkdir -p $HOME/.local/share/waydroid-data
 
-# Verifica se o módulo do kernel binder_linux está carregado
+# Set up user-space environment
+export WAYDROID_DATA=$HOME/.local/share/waydroid-data
+export LXC_PATH=$HOME/.local/share/lxc
+export LD_LIBRARY_PATH=$HERE/.junest/opt/waydroid-userspace/lxc-install/lib:$LD_LIBRARY_PATH
+export PATH=$HERE/.junest/opt/waydroid-userspace/lxc-install/bin:$PATH
+
+# Load user-space binder module if kernel module is not available
 if ! lsmod | grep -q binder_linux; then
-    echo "Tentando carregar o módulo binder_linux..."
-    sudo modprobe binder_linux 2>/dev/null || echo "Não foi possível carregar o módulo binder_linux. Use: sudo modprobe binder_linux"
+    echo "Kernel binder_linux module not detected, using user-space implementation..."
+    export LD_PRELOAD=$HERE/.junest/opt/waydroid-modules/anbox-binder/libbionic-binder.so
+    export BINDER_DRIVER="user"
+else
+    echo "Kernel binder_linux module detected, using it..."
+    export BINDER_DRIVER="kernel"
 fi
 
-# Tenta iniciar o lxc se não estiver rodando
-if ! systemctl is-active lxc.service >/dev/null 2>&1; then
-    echo "Tentando iniciar serviço LXC..."
-    sudo systemctl start lxc.service 2>/dev/null || echo "LXC não está disponível. Certifique-se de que o LXC está instalado."
+# Prepare LXC environment
+if [ ! -f $HOME/.local/share/lxc/waydroid/config ]; then
+    mkdir -p $HOME/.local/share/lxc/waydroid
+    
+    # Create basic LXC config for user-space
+    cat > $HOME/.local/share/lxc/waydroid/config << 'LXCCONFIG'
+lxc.net.0.type = none
+lxc.rootfs.path = dir:$WAYDROID_DATA/rootfs
+lxc.uts.name = waydroid
+LXCCONFIG
+    
+    echo "LXC environment initialized in user-space mode"
 fi
 
-# Executa o comando Waydroid
+# Set up Waydroid config if not exists
+if [ ! -f $HOME/.config/waydroid/waydroid_base.prop ]; then
+    cp $HERE/.junest/etc/waydroid/* $HOME/.config/waydroid/ 2>/dev/null
+    echo "Copied default Waydroid configuration"
+fi
+
+# Start Waydroid
+echo "Starting Waydroid in user-space mode..."
+echo "Note: This is a modified version that attempts to run without root privileges"
+echo "Some features may be limited compared to the full system version"
+
+# Execute the Waydroid command
 EXEC=$(grep -e '^Exec=.*' "${HERE}"/*.desktop | head -n 1 | cut -d "=" -f 2- | sed -e 's|%.||g')
-$HERE/.local/share/junest/bin/junest proot -n -b "--bind=/home --bind=/home/$(echo $USER) --bind=/media --bind=/mnt --bind=/opt --bind=/usr/lib/locale --bind=/etc/fonts --bind=/usr/share/fonts --bind=/usr/share/themes --bind=/run/user/$(id -u) --bind=/dev --bind=/sys --bind=/var/lib" 2> /dev/null -- $EXEC "$@"
+$HERE/.local/share/junest/bin/junest proot -n -b "--bind=/home --bind=/home/$(echo $USER) --bind=/media --bind=/mnt --bind=/opt --bind=/usr/lib/locale --bind=/etc/fonts --bind=/usr/share/fonts --bind=/usr/share/themes --bind=/run/user/$(id -u) --bind=/tmp" 2> /dev/null -- $EXEC "$@"
 EOF
 chmod a+x ./AppRun
 
@@ -172,7 +227,7 @@ mkdir -p ./junest-backups/usr/share
 # STEP 2, FUNCTION TO SAVE THE BINARIES IN /usr/bin THAT ARE NEEDED TO MADE JUNEST WORK, PLUS THE MAIN BINARY/BINARIES OF THE APP
 # Adicionamos os binários necessários para o Waydroid
 _savebins(){
-	BINSAVED="python python3 gbinder lxc lxc-* pip3"
+	BINSAVED="python python3 gbinder lxc lxc-* pip3 anbox-binder"
 	mkdir save
 	mv ./$APP.AppDir/.junest/usr/bin/*$BIN* ./save/
 	mv ./$APP.AppDir/.junest/usr/bin/bash ./save/
@@ -223,7 +278,7 @@ mv ./$APP.AppDir/.junest/usr/lib/sysusers.d/git.conf ./junest-backups/usr/lib/ 2
 # STEP 4, SAVE ONLY SOME DIRECTORIES CONTAINED IN /usr/share
 # Adicionamos os diretórios necessários para o Python e Waydroid
 _saveshare(){
-	SHARESAVED="python waydroid lxc"
+	SHARESAVED="python waydroid lxc anbox-binder"
 	mkdir save
 	mv ./$APP.AppDir/.junest/usr/share/*$APP* ./save/ 2>/dev/null
  	mv ./$APP.AppDir/.junest/usr/share/*$BIN* ./save/ 2>/dev/null
@@ -253,32 +308,34 @@ rm -R -f ./$APP.AppDir/.junest/home
 mkdir -p ./$APP.AppDir/.junest/home
 mkdir -p ./$APP.AppDir/.junest/media
 mkdir -p ./$APP.AppDir/.junest/run
-mkdir -p ./$APP.AppDir/.junest/dev
-mkdir -p ./$APP.AppDir/.junest/sys
-mkdir -p ./$APP.AppDir/.junest/var/lib/waydroid
+mkdir -p ./$APP.AppDir/.junest/tmp
+mkdir -p ./$APP.AppDir/.junest/opt/waydroid-modules
 
 # CREATE README FILE
 cat > ./$APP.AppDir/README.txt << 'EOF'
-# Waydroid AppImage
+# Waydroid AppImage (No Root Required)
 
-Este AppImage contém o Waydroid, um container Android para Wayland.
+Este AppImage contém o Waydroid, um container Android para Wayland, modificado para funcionar sem permissões de root.
 
-## Requisitos do sistema:
-1. Linux com Wayland
-2. Kernel com suporte ao módulo binder_linux
-3. LXC instalado e configurado
-4. Permissões de superusuário para carregar o módulo binder_linux
+## Recursos desta versão:
+1. Implementação de módulo binder em userspace
+2. LXC configurado para rodar sem privilégios de superusuário
+3. Estrutura de diretórios personalizada dentro do diretório do usuário
 
-## Importante:
-- O AppImage deve ser executado com permissões normais (não use sudo)
-- O módulo binder_linux deve estar carregado: `sudo modprobe binder_linux`
-- O serviço LXC deve estar em execução: `sudo systemctl start lxc.service`
-
-## Uso básico:
-1. Execute o AppImage
+## Como usar:
+1. Execute o AppImage normalmente (sem sudo)
 2. Na primeira execução, use `waydroid init` para configurar
 3. Para iniciar o container: `waydroid session start`
 4. Para iniciar a interface: `waydroid show-full-ui`
+
+## Limitações:
+- Algumas funcionalidades avançadas podem não estar disponíveis
+- O desempenho pode ser inferior comparado à versão com root
+- Compatibilidade com alguns aplicativos pode ser limitada
+
+## Nota:
+Se você tiver o módulo binder_linux carregado no kernel, ele será usado automaticamente.
+Se não, o AppImage usará uma implementação em userspace.
 
 Mais informações: https://github.com/waydroid/waydroid
 EOF
