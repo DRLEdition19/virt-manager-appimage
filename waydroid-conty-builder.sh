@@ -11,7 +11,7 @@ WORKDIR=$(mktemp -d)
 APPDIR="$WORKDIR/$APP_NAME.AppDir"
 
 # Dependências necessárias
-DEPENDENCIES="squashfs-tools wget curl fuse"
+# DEPENDENCIES="squashfs-tools wget curl fuse"
 
 # Certifique-se de que todas as dependências estão instaladas
 for dep in $DEPENDENCIES; do
