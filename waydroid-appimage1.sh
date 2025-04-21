@@ -28,8 +28,6 @@ DEPENDENCIES=(
     "curl"
     "tar"
     "gzip"
-    "squashfs-tools"
-    "fuse"
     "python3"
     "git"
 )
